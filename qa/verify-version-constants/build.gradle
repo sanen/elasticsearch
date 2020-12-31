@@ -17,50 +17,36 @@
  * under the License.
  */
 
-import java.util.Locale
 import org.elasticsearch.gradle.Version
 import org.elasticsearch.gradle.VersionProperties
-import org.elasticsearch.gradle.test.RestIntegTestTask
+import org.elasticsearch.gradle.info.BuildParams
+import org.elasticsearch.gradle.testclusters.StandaloneRestIntegTestTask
 
+apply plugin: 'elasticsearch.testclusters'
 apply plugin: 'elasticsearch.standalone-test'
+apply from : "$rootDir/gradle/bwc-test.gradle"
 
-// This is a top level task which we will add dependencies to below.
-// It is a single task that can be used to backcompat tests against all versions.
-task bwcTest {
-    description = 'Runs backwards compatibility tests.'
-    group = 'verification'
+for (Version bwcVersion : BuildParams.bwcVersions.indexCompatible) {
+  String baseName = "v${bwcVersion}"
+
+  testClusters {
+    "${baseName}" {
+      version = bwcVersion.toString()
+    }
+  }
+
+  tasks.register("${baseName}#integTest", StandaloneRestIntegTestTask) {
+    useCluster testClusters."${baseName}"
+    nonInputProperties.systemProperty('tests.rest.cluster', "${-> testClusters."${baseName}".allHttpSocketURI.join(",")}")
+    nonInputProperties.systemProperty('tests.clustername', "${-> testClusters."${baseName}".getName()}")
+  }
+
+  tasks.register(bwcTaskName(bwcVersion)) {
+    dependsOn "${baseName}#integTest"
+  }
 }
 
-for (Version version : indexCompatVersions) {
-    String baseName = "v${version}"
-    Task oldClusterTest = tasks.create(name: "${baseName}#oldClusterTest", type: RestIntegTestTask) {
-        mustRunAfter(precommit)
-    }
-    configure(extensions.findByName("${baseName}#oldClusterTestCluster")) {
-        distribution = 'zip'
-        bwcVersion = version
-        numBwcNodes = 1
-        numNodes = 1
-        clusterName = 'verify-version-constants'
-        if (version.onOrAfter('5.3.0')) {
-            setting 'http.content_type.required', 'true'
-        }
-    }
-
-    Task versionBwcTest = tasks.create(name: "${baseName}#bwcTest") {
-        dependsOn = [oldClusterTest]
-    }
-
-    bwcTest.dependsOn(versionBwcTest)
-}
-
-test.enabled = false
-
-task integTest {
-    dependsOn = ["v${indexCompatVersions[-1]}#bwcTest"]
-}
-
-task verifyDocsLuceneVersion {
+tasks.register("verifyDocsLuceneVersion") {
   doFirst {
     File docsVersionsFile = rootProject.file('docs/Versions.asciidoc')
     List<String> versionLines = docsVersionsFile.readLines('UTF-8')
@@ -74,14 +60,14 @@ task verifyDocsLuceneVersion {
       throw new GradleException('Could not find lucene version in docs version file')
     }
     String expectedLuceneVersion = VersionProperties.lucene
-    if (expectedLuceneVersion.contains('-snapshot-')) {
-      expectedLuceneVersion = expectedLuceneVersion.substring(0, expectedLuceneVersion.lastIndexOf('-'))
-      expectedLuceneVersion = expectedLuceneVersion.toUpperCase(Locale.ROOT)
-    }
+    // remove potential -snapshot-{gitrev} suffix
+    expectedLuceneVersion -= ~/-snapshot-[0-9a-f]+$/
     if (docsLuceneVersion != expectedLuceneVersion) {
       throw new GradleException("Lucene version in docs [${docsLuceneVersion}] does not match version.properties [${expectedLuceneVersion}]")
     }
   }
 }
 
-check.dependsOn integTest, verifyDocsLuceneVersion
+tasks.named("check").configure {
+  dependsOn verifyDocsLuceneVersion
+}

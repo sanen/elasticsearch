@@ -23,9 +23,10 @@ import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.analysis.TokenStream;
 import org.apache.lucene.analysis.tokenattributes.CharTermAttribute;
 import org.elasticsearch.Version;
-import org.elasticsearch.cluster.metadata.IndexMetaData;
+import org.elasticsearch.cluster.metadata.IndexMetadata;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.env.Environment;
+import org.elasticsearch.env.TestEnvironment;
 import org.elasticsearch.index.IndexSettings;
 import org.elasticsearch.index.analysis.IndexAnalyzers;
 import org.elasticsearch.index.analysis.MyFilterTokenFilterFactory;
@@ -87,7 +88,7 @@ public class CompoundAnalysisTests extends ESTestCase {
 
     private AnalysisModule createAnalysisModule(Settings settings) throws IOException {
         CommonAnalysisPlugin commonAnalysisPlugin = new CommonAnalysisPlugin();
-        return new AnalysisModule(new Environment(settings), Arrays.asList(commonAnalysisPlugin, new AnalysisPlugin() {
+        return new AnalysisModule(TestEnvironment.newEnvironment(settings), Arrays.asList(commonAnalysisPlugin, new AnalysisPlugin() {
             @Override
             public Map<String, AnalysisProvider<TokenFilterFactory>> getTokenFilters() {
                 return singletonMap("myfilter", MyFilterTokenFilterFactory::new);
@@ -99,7 +100,7 @@ public class CompoundAnalysisTests extends ESTestCase {
         String json = "/org/elasticsearch/analysis/common/test1.json";
         return Settings.builder()
                 .loadFromStream(json, getClass().getResourceAsStream(json), false)
-                .put(IndexMetaData.SETTING_VERSION_CREATED, Version.CURRENT)
+                .put(IndexMetadata.SETTING_VERSION_CREATED, Version.CURRENT)
                 .put(Environment.PATH_HOME_SETTING.getKey(), createTempDir().toString())
                 .build();
     }
@@ -108,7 +109,7 @@ public class CompoundAnalysisTests extends ESTestCase {
         String yaml = "/org/elasticsearch/analysis/common/test1.yml";
         return Settings.builder()
                 .loadFromStream(yaml, getClass().getResourceAsStream(yaml), false)
-                .put(IndexMetaData.SETTING_VERSION_CREATED, Version.CURRENT)
+                .put(IndexMetadata.SETTING_VERSION_CREATED, Version.CURRENT)
                 .put(Environment.PATH_HOME_SETTING.getKey(), createTempDir().toString())
                 .build();
     }

@@ -21,12 +21,12 @@ package org.elasticsearch.analysis.common;
 
 import org.apache.lucene.analysis.TokenStream;
 import org.apache.lucene.analysis.ngram.EdgeNGramTokenFilter;
-import org.apache.lucene.analysis.ngram.NGramTokenFilter;
 import org.apache.lucene.analysis.reverse.ReverseStringFilter;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.env.Environment;
 import org.elasticsearch.index.IndexSettings;
 import org.elasticsearch.index.analysis.AbstractTokenFilterFactory;
+import org.elasticsearch.index.analysis.TokenFilterFactory;
 
 
 public class EdgeNGramTokenFilterFactory extends AbstractTokenFilterFactory {
@@ -38,12 +38,15 @@ public class EdgeNGramTokenFilterFactory extends AbstractTokenFilterFactory {
     public static final int SIDE_FRONT = 1;
     public static final int SIDE_BACK = 2;
     private final int side;
+    private final boolean preserveOriginal;
+    private static final String PRESERVE_ORIG_KEY = "preserve_original";
 
     EdgeNGramTokenFilterFactory(IndexSettings indexSettings, Environment environment, String name, Settings settings) {
         super(indexSettings, name, settings);
-        this.minGram = settings.getAsInt("min_gram", NGramTokenFilter.DEFAULT_MIN_NGRAM_SIZE);
-        this.maxGram = settings.getAsInt("max_gram", NGramTokenFilter.DEFAULT_MAX_NGRAM_SIZE);
+        this.minGram = settings.getAsInt("min_gram", 1);
+        this.maxGram = settings.getAsInt("max_gram", 2);
         this.side = parseSide(settings.get("side", "front"));
+        this.preserveOriginal = settings.getAsBoolean(PRESERVE_ORIG_KEY, false);
     }
 
     static int parseSide(String side) {
@@ -63,7 +66,7 @@ public class EdgeNGramTokenFilterFactory extends AbstractTokenFilterFactory {
             result = new ReverseStringFilter(result);
         }
 
-        result = new EdgeNGramTokenFilter(result, minGram, maxGram);
+        result = new EdgeNGramTokenFilter(result, minGram, maxGram, preserveOriginal);
 
         // side=BACK is not supported anymore but applying ReverseStringFilter up-front and after the token filter has the same effect
         if (side == SIDE_BACK) {
@@ -76,5 +79,10 @@ public class EdgeNGramTokenFilterFactory extends AbstractTokenFilterFactory {
     @Override
     public boolean breaksFastVectorHighlighter() {
         return true;
+    }
+
+    @Override
+    public TokenFilterFactory getSynonymFilter() {
+        throw new IllegalArgumentException("Token filter [" + name() + "] cannot be used to parse synonyms");
     }
 }

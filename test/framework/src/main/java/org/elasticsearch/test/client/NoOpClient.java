@@ -20,11 +20,10 @@
 package org.elasticsearch.test.client;
 
 import org.elasticsearch.ElasticsearchException;
-import org.elasticsearch.action.Action;
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.ActionRequest;
-import org.elasticsearch.action.ActionRequestBuilder;
 import org.elasticsearch.action.ActionResponse;
+import org.elasticsearch.action.ActionType;
 import org.elasticsearch.client.support.AbstractClient;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.threadpool.TestThreadPool;
@@ -33,7 +32,10 @@ import org.elasticsearch.threadpool.ThreadPool;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Client that always responds with {@code null} to every request. Override this for testing.
+ * Client that always responds with {@code null} to every request. Override {@link #doExecute(ActionType, ActionRequest, ActionListener)}
+ * for testing.
+ *
+ * See also {@link NoOpNodeClient} if you need to mock a {@link org.elasticsearch.client.node.NodeClient}.
  */
 public class NoOpClient extends AbstractClient {
     /**
@@ -44,17 +46,15 @@ public class NoOpClient extends AbstractClient {
     }
 
     /**
-     * Create a new {@link TestThreadPool} for this client.
+     * Create a new {@link TestThreadPool} for this client. This {@linkplain TestThreadPool} is terminated on {@link #close()}.
      */
     public NoOpClient(String testName) {
         super(Settings.EMPTY, new TestThreadPool(testName));
     }
 
     @Override
-    protected <Request extends ActionRequest,
-                    Response extends ActionResponse,
-                    RequestBuilder extends ActionRequestBuilder<Request, Response, RequestBuilder>>
-            void doExecute(Action<Request, Response, RequestBuilder> action, Request request, ActionListener<Response> listener) {
+    protected <Request extends ActionRequest, Response extends ActionResponse>
+    void doExecute(ActionType<Response> action, Request request, ActionListener<Response> listener) {
         listener.onResponse(null);
     }
 

@@ -28,9 +28,8 @@ import org.apache.lucene.search.MatchAllDocsQuery;
 import org.elasticsearch.common.bytes.BytesArray;
 import org.elasticsearch.common.lucene.search.function.FunctionScoreQuery;
 import org.elasticsearch.common.lucene.search.function.RandomScoreFunction;
-import org.elasticsearch.common.settings.Settings;
-import org.elasticsearch.search.fetch.subphase.highlight.SearchContextHighlight;
-import org.elasticsearch.search.internal.SearchContext;
+import org.elasticsearch.search.fetch.FetchContext;
+import org.elasticsearch.search.fetch.subphase.highlight.SearchHighlightContext;
 import org.elasticsearch.test.ESTestCase;
 import org.mockito.Mockito;
 
@@ -38,29 +37,29 @@ import java.util.Arrays;
 import java.util.Collections;
 
 import static java.util.Collections.emptyMap;
+import static org.hamcrest.Matchers.containsInAnyOrder;
 import static org.hamcrest.Matchers.equalTo;
-import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.sameInstance;
+import static org.mockito.Mockito.mock;
 
 public class PercolatorHighlightSubFetchPhaseTests extends ESTestCase {
 
     public void testHitsExecutionNeeded() {
         PercolateQuery percolateQuery = new PercolateQuery("_name", ctx -> null, Collections.singletonList(new BytesArray("{}")),
-            new MatchAllDocsQuery(), Mockito.mock(IndexSearcher.class), new MatchAllDocsQuery());
-        PercolatorHighlightSubFetchPhase subFetchPhase = new PercolatorHighlightSubFetchPhase(Settings.EMPTY,
-            emptyMap());
-        SearchContext searchContext = Mockito.mock(SearchContext.class);
-        Mockito.when(searchContext.highlight()).thenReturn(new SearchContextHighlight(Collections.emptyList()));
-        Mockito.when(searchContext.query()).thenReturn(new MatchAllDocsQuery());
+            new MatchAllDocsQuery(), Mockito.mock(IndexSearcher.class), null, new MatchAllDocsQuery());
+        PercolatorHighlightSubFetchPhase subFetchPhase = new PercolatorHighlightSubFetchPhase(emptyMap());
+        FetchContext fetchContext = mock(FetchContext.class);
+        Mockito.when(fetchContext.highlight()).thenReturn(new SearchHighlightContext(Collections.emptyList()));
+        Mockito.when(fetchContext.query()).thenReturn(new MatchAllDocsQuery());
 
-        assertThat(subFetchPhase.hitsExecutionNeeded(searchContext), is(false));
-        Mockito.when(searchContext.query()).thenReturn(percolateQuery);
-        assertThat(subFetchPhase.hitsExecutionNeeded(searchContext), is(true));
+        assertNull(subFetchPhase.getProcessor(fetchContext));
+        Mockito.when(fetchContext.query()).thenReturn(percolateQuery);
+        assertNotNull(subFetchPhase.getProcessor(fetchContext));
     }
 
     public void testLocatePercolatorQuery() {
         PercolateQuery percolateQuery = new PercolateQuery("_name", ctx -> null, Collections.singletonList(new BytesArray("{}")),
-            new MatchAllDocsQuery(), Mockito.mock(IndexSearcher.class), new MatchAllDocsQuery());
+            new MatchAllDocsQuery(), Mockito.mock(IndexSearcher.class), null, new MatchAllDocsQuery());
         assertThat(PercolatorHighlightSubFetchPhase.locatePercolatorQuery(new MatchAllDocsQuery()).size(), equalTo(0));
         BooleanQuery.Builder bq = new BooleanQuery.Builder();
         bq.add(new MatchAllDocsQuery(), BooleanClause.Occur.FILTER);
@@ -94,15 +93,18 @@ public class PercolatorHighlightSubFetchPhaseTests extends ESTestCase {
         assertThat(PercolatorHighlightSubFetchPhase.locatePercolatorQuery(disjunctionMaxQuery).get(0), sameInstance(percolateQuery));
 
         PercolateQuery percolateQuery2 = new PercolateQuery("_name", ctx -> null, Collections.singletonList(new BytesArray("{}")),
-            new MatchAllDocsQuery(), Mockito.mock(IndexSearcher.class), new MatchAllDocsQuery());
+            new MatchAllDocsQuery(), Mockito.mock(IndexSearcher.class), null, new MatchAllDocsQuery());
         bq = new BooleanQuery.Builder();
         bq.add(new MatchAllDocsQuery(), BooleanClause.Occur.FILTER);
         assertThat(PercolatorHighlightSubFetchPhase.locatePercolatorQuery(bq.build()).size(), equalTo(0));
         bq.add(percolateQuery, BooleanClause.Occur.FILTER);
         bq.add(percolateQuery2, BooleanClause.Occur.FILTER);
         assertThat(PercolatorHighlightSubFetchPhase.locatePercolatorQuery(bq.build()).size(), equalTo(2));
-        assertThat(PercolatorHighlightSubFetchPhase.locatePercolatorQuery(bq.build()).get(0), sameInstance(percolateQuery));
-        assertThat(PercolatorHighlightSubFetchPhase.locatePercolatorQuery(bq.build()).get(1), sameInstance(percolateQuery2));
+        assertThat(PercolatorHighlightSubFetchPhase.locatePercolatorQuery(bq.build()),
+            containsInAnyOrder(sameInstance(percolateQuery), sameInstance(percolateQuery2)));
+
+        assertNotNull(PercolatorHighlightSubFetchPhase.locatePercolatorQuery(null));
+        assertThat(PercolatorHighlightSubFetchPhase.locatePercolatorQuery(null).size(), equalTo(0));
     }
 
 }

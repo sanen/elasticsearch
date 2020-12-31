@@ -24,6 +24,7 @@ import org.elasticsearch.common.SuppressForbidden;
 import org.elasticsearch.common.io.PathUtils;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.env.Environment;
+import org.elasticsearch.env.TestEnvironment;
 import org.elasticsearch.test.ESTestCase;
 
 import java.io.FilePermission;
@@ -54,7 +55,7 @@ public class EvilSecurityTests extends ESTestCase {
         Permissions permissions;
         try {
             System.setProperty("java.io.tmpdir", fakeTmpDir.toString());
-            Environment environment = new Environment(settings);
+            Environment environment = TestEnvironment.newEnvironment(settings);
             permissions = Security.createPermissions(environment);
         } finally {
             System.setProperty("java.io.tmpdir", realTmpDir);
@@ -84,7 +85,7 @@ public class EvilSecurityTests extends ESTestCase {
                 esHome.resolve("data2").toString());
         settingsBuilder.put(Environment.PATH_SHARED_DATA_SETTING.getKey(), esHome.resolve("custom").toString());
         settingsBuilder.put(Environment.PATH_LOGS_SETTING.getKey(), esHome.resolve("logs").toString());
-        settingsBuilder.put(Environment.PIDFILE_SETTING.getKey(), esHome.resolve("test.pid").toString());
+        settingsBuilder.put(Environment.NODE_PIDFILE_SETTING.getKey(), esHome.resolve("test.pid").toString());
         Settings settings = settingsBuilder.build();
 
         Path fakeTmpDir = createTempDir();
@@ -125,9 +126,6 @@ public class EvilSecurityTests extends ESTestCase {
         for (Path dataPath : environment.dataFiles()) {
             assertExactPermissions(new FilePermission(dataPath.toString(), "read,readlink,write,delete"), permissions);
         }
-        for (Path dataPath : environment.dataWithClusterFiles()) {
-            assertExactPermissions(new FilePermission(dataPath.toString(), "read,readlink,write,delete"), permissions);
-        }
         assertExactPermissions(new FilePermission(environment.sharedDataFile().toString(), "read,readlink,write,delete"), permissions);
         // logs: r/w
         assertExactPermissions(new FilePermission(environment.logsFile().toString(), "read,readlink,write,delete"), permissions);
@@ -138,6 +136,7 @@ public class EvilSecurityTests extends ESTestCase {
     }
 
     public void testDuplicateDataPaths() throws IOException {
+        assumeFalse("https://github.com/elastic/elasticsearch/issues/44558", Constants.WINDOWS);
         final Path path = createTempDir();
         final Path home = path.resolve("home");
         final Path data = path.resolve("data");
@@ -156,7 +155,7 @@ public class EvilSecurityTests extends ESTestCase {
                         .putList(Environment.PATH_DATA_SETTING.getKey(), data.toString(), duplicate.toString())
                         .build();
 
-        final Environment environment = new Environment(settings);
+        final Environment environment = TestEnvironment.newEnvironment(settings);
         final IllegalStateException e = expectThrows(IllegalStateException.class, () -> Security.createPermissions(environment));
         assertThat(e, hasToString(containsString("path [" + duplicate.toRealPath() + "] is duplicated by [" + duplicate + "]")));
     }
@@ -217,7 +216,7 @@ public class EvilSecurityTests extends ESTestCase {
             assumeNoException("test cannot create symbolic links with security manager enabled", e);
         }
         Permissions permissions = new Permissions();
-        FilePermissionUtils.addDirectoryPath(permissions, "testing", link, "read");
+        FilePermissionUtils.addDirectoryPath(permissions, "testing", link, "read", false);
         assertExactPermissions(new FilePermission(link.toString(), "read"), permissions);
         assertExactPermissions(new FilePermission(link.resolve("foo").toString(), "read"), permissions);
         assertExactPermissions(new FilePermission(target.toString(), "read"), permissions);

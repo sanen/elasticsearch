@@ -21,28 +21,30 @@ package org.elasticsearch.ingest.common;
 
 import java.io.UnsupportedEncodingException;
 import java.net.URLDecoder;
-import java.nio.charset.StandardCharsets;
-import java.util.Locale;
 import java.util.Map;
 
 /**
  * Processor that URL-decodes a string
  */
-public final class URLDecodeProcessor extends AbstractStringProcessor {
+public final class URLDecodeProcessor extends AbstractStringProcessor<String> {
 
     public static final String TYPE = "urldecode";
 
-    URLDecodeProcessor(String processorTag, String field, boolean ignoreMissing, String targetField) {
-        super(processorTag, field, ignoreMissing, targetField);
+    URLDecodeProcessor(String processorTag, String description, String field, boolean ignoreMissing, String targetField) {
+        super(processorTag, description, ignoreMissing, targetField, field);
+    }
+
+    public static String apply(String value) {
+        try {
+            return URLDecoder.decode(value, "UTF-8");
+        } catch (UnsupportedEncodingException e) {
+            throw new IllegalArgumentException("Could not URL-decode value.", e);
+        }
     }
 
     @Override
     protected String process(String value) {
-        try {
-            return URLDecoder.decode(value, "UTF-8");
-        } catch (UnsupportedEncodingException e) {
-            throw new IllegalArgumentException("could not URL-decode field[" + getField() + "]", e);
-        }
+        return apply(value);
     }
 
     @Override
@@ -57,9 +59,9 @@ public final class URLDecodeProcessor extends AbstractStringProcessor {
         }
 
         @Override
-        protected URLDecodeProcessor newProcessor(String tag, Map<String, Object> config, String field,
+        protected URLDecodeProcessor newProcessor(String tag, String description, Map<String, Object> config, String field,
                                                   boolean ignoreMissing, String targetField) {
-            return new URLDecodeProcessor(tag, field, ignoreMissing, targetField);
+            return new URLDecodeProcessor(tag, description, field, ignoreMissing, targetField);
         }
     }
 }

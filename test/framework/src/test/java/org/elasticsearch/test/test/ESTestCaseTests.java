@@ -22,6 +22,7 @@ package org.elasticsearch.test.test;
 import junit.framework.AssertionFailedError;
 
 import org.elasticsearch.common.bytes.BytesReference;
+import org.elasticsearch.common.time.DateFormatter;
 import org.elasticsearch.common.xcontent.XContentBuilder;
 import org.elasticsearch.common.xcontent.XContentParser;
 import org.elasticsearch.common.xcontent.XContentType;
@@ -38,9 +39,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Supplier;
 
+import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.greaterThan;
 import static org.hamcrest.Matchers.hasSize;
+import static org.hamcrest.Matchers.not;
 
 public class ESTestCaseTests extends ESTestCase {
 
@@ -118,7 +122,7 @@ public class ESTestCaseTests extends ESTestCase {
                 }
             }
             builder.endObject();
-            BytesReference bytes = builder.bytes();
+            BytesReference bytes = BytesReference.bytes(builder);
             final LinkedHashMap<String, Object> initialMap;
             try (XContentParser parser = createParser(xContentType.xContent(), bytes)) {
                 initialMap = (LinkedHashMap<String, Object>)parser.mapOrdered();
@@ -165,5 +169,52 @@ public class ESTestCaseTests extends ESTestCase {
 
     public void testRandomUniqueNormalUsageAlwayMoreThanOne() {
         assertThat(randomUnique(() -> randomAlphaOfLengthBetween(1, 20), 10), hasSize(greaterThan(0)));
+    }
+
+    public void testRandomValueOtherThan() {
+        // "normal" way of calling where the value is not null
+        int bad = randomInt();
+        assertNotEquals(bad, (int) randomValueOtherThan(bad, ESTestCase::randomInt));
+
+        /*
+         * "funny" way of calling where the value is null. This once
+         * had a unique behavior but at this point `null` acts just
+         * like any other value.
+         */
+        Supplier<Object> usuallyNull = () -> usually() ? null : randomInt();
+        assertNotNull(randomValueOtherThan(null, usuallyNull));
+    }
+
+    public void testWorkerSystemProperty() {
+        assumeTrue("requires running tests with Gradle", System.getProperty("tests.gradle") != null);
+
+        assertThat(ESTestCase.TEST_WORKER_VM_ID, not(equals(ESTestCase.DEFAULT_TEST_WORKER_ID)));
+    }
+
+    public void testBasePortGradle() {
+        assumeTrue("requires running tests with Gradle", System.getProperty("tests.gradle") != null);
+        // Gradle worker IDs are 1 based
+        assertNotEquals(10300, ESTestCase.getBasePort());
+    }
+
+    public void testBasePortIDE() {
+        assumeTrue("requires running tests without Gradle", System.getProperty("tests.gradle") == null);
+        assertEquals(10300, ESTestCase.getBasePort());
+    }
+
+    public void testRandomDateFormatterPattern() {
+        DateFormatter formatter = DateFormatter.forPattern(randomDateFormatterPattern());
+        /*
+         * Make sure it doesn't crash trying to format some dates and
+         * that round tripping through millis doesn't lose any information.
+         * Interestingly, round tripping through a string *can* lose
+         * information because not all date formats spit out milliseconds.
+         * Hell, not all of them spit out the time of day at all!
+         * But going from text back to millis back to text should
+         * be fine!
+         */
+        String formatted = formatter.formatMillis(randomLongBetween(0, 2_000_000_000_000L));
+        String formattedAgain = formatter.formatMillis(formatter.parseMillis(formatted));
+        assertThat(formattedAgain, equalTo(formatted));
     }
 }

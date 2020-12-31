@@ -19,9 +19,12 @@
 package org.elasticsearch.test.junit.listeners;
 
 import com.carrotsearch.randomizedtesting.ReproduceErrorMessageBuilder;
+import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.apache.lucene.util.Constants;
+import org.elasticsearch.bootstrap.JavaVersion;
 import org.elasticsearch.common.Strings;
-import org.elasticsearch.common.logging.Loggers;
+import org.elasticsearch.common.SuppressForbidden;
 import org.elasticsearch.test.ESIntegTestCase;
 import org.elasticsearch.test.ESTestCase;
 import org.elasticsearch.test.rest.yaml.ESClientYamlSuiteTestCase;
@@ -35,6 +38,7 @@ import java.util.TimeZone;
 
 import static com.carrotsearch.randomizedtesting.SysGlobals.SYSPROP_ITERATIONS;
 import static com.carrotsearch.randomizedtesting.SysGlobals.SYSPROP_PREFIX;
+import static com.carrotsearch.randomizedtesting.SysGlobals.SYSPROP_TESTCLASS;
 import static com.carrotsearch.randomizedtesting.SysGlobals.SYSPROP_TESTMETHOD;
 import static org.elasticsearch.test.rest.yaml.ESClientYamlSuiteTestCase.REST_TESTS_BLACKLIST;
 import static org.elasticsearch.test.rest.yaml.ESClientYamlSuiteTestCase.REST_TESTS_SUITE;
@@ -45,7 +49,7 @@ import static org.elasticsearch.test.rest.yaml.ESClientYamlSuiteTestCase.REST_TE
  */
 public class ReproduceInfoPrinter extends RunListener {
 
-    protected final Logger logger = Loggers.getLogger(ESTestCase.class);
+    protected final Logger logger = LogManager.getLogger(ESTestCase.class);
 
     @Override
     public void testStarted(Description description) throws Exception {
@@ -71,11 +75,33 @@ public class ReproduceInfoPrinter extends RunListener {
             return;
         }
 
-        final StringBuilder b = new StringBuilder("REPRODUCE WITH: gradle ");
+        final String gradlew = Constants.WINDOWS ? "gradlew" : "./gradlew";
+        final StringBuilder b = new StringBuilder("REPRODUCE WITH: " + gradlew + " ");
         String task = System.getProperty("tests.task");
-        // TODO: enforce (intellij still runs the runner?) or use default "test" but that won't work for integ
-        b.append(task);
+        boolean isBwcTest = Boolean.parseBoolean(System.getProperty("tests.bwc", "false"));
 
+        // append Gradle test runner test filter string
+        b.append("'" + task + "'");
+        if (isBwcTest) {
+            // Use "legacy" method for bwc tests so that it applies globally to all upstream bwc test tasks
+            b.append(" -Dtests.class=\"");
+        } else {
+            b.append(" --tests \"");
+        }
+        b.append(failure.getDescription().getClassName());
+
+        final String methodName = failure.getDescription().getMethodName();
+        if (methodName != null) {
+            // fallback to system property filter when tests contain "."
+            if (methodName.contains(".") || isBwcTest) {
+                b.append("\" -Dtests.method=\"");
+                b.append(methodName);
+            } else {
+                b.append(".");
+                b.append(methodName);
+            }
+        }
+        b.append("\"");
         GradleMessageBuilder gradleMessageBuilder = new GradleMessageBuilder(b);
         gradleMessageBuilder.appendAllOpts(failure.getDescription());
 
@@ -84,7 +110,12 @@ public class ReproduceInfoPrinter extends RunListener {
             gradleMessageBuilder.appendClientYamlSuiteProperties();
         }
 
-        System.err.println(b.toString());
+        printToErr(b.toString());
+    }
+
+    @SuppressForbidden(reason = "printing repro info")
+    private static void printToErr(String s) {
+        System.err.println(s);
     }
 
     protected static class GradleMessageBuilder extends ReproduceErrorMessageBuilder {
@@ -96,11 +127,6 @@ public class ReproduceInfoPrinter extends RunListener {
         @Override
         public ReproduceErrorMessageBuilder appendAllOpts(Description description) {
             super.appendAllOpts(description);
-
-            if (description.getMethodName() != null) {
-                //prints out the raw method description instead of methodName(description) which filters out the parameters
-                super.appendOpt(SYSPROP_TESTMETHOD(), "\"" + description.getMethodName() + "\"");
-            }
 
             return appendESProperties();
         }
@@ -119,6 +145,11 @@ public class ReproduceInfoPrinter extends RunListener {
             if (sysPropName.equals(SYSPROP_ITERATIONS())) { // we don't want the iters to be in there!
                 return this;
             }
+            if (sysPropName.equals(SYSPROP_TESTCLASS())) {
+                //don't print out the test class, we print it ourselves in appendAllOpts
+                //without filtering out the parameters (needed for REST tests)
+                return this;
+            }
             if (sysPropName.equals(SYSPROP_TESTMETHOD())) {
                 //don't print out the test method, we print it ourselves in appendAllOpts
                 //without filtering out the parameters (needed for REST tests)
@@ -134,7 +165,7 @@ public class ReproduceInfoPrinter extends RunListener {
             return this;
         }
 
-        public ReproduceErrorMessageBuilder appendESProperties() {
+        private ReproduceErrorMessageBuilder appendESProperties() {
             appendProperties("tests.es.logger.level");
             if (inVerifyPhase()) {
                 // these properties only make sense for integration tests
@@ -147,6 +178,10 @@ public class ReproduceInfoPrinter extends RunListener {
             }
             appendOpt("tests.locale", Locale.getDefault().toLanguageTag());
             appendOpt("tests.timezone", TimeZone.getDefault().getID());
+            appendOpt("tests.distribution", System.getProperty("tests.distribution"));
+            appendOpt("runtime.java", Integer.toString(JavaVersion.current().getVersion().get(0)));
+            appendOpt("license.key", System.getProperty("licence.key"));
+            appendOpt(ESTestCase.FIPS_SYSPROP, System.getProperty(ESTestCase.FIPS_SYSPROP));
             return this;
         }
 

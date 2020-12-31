@@ -27,17 +27,21 @@ import java.util.Map;
  * Throws exception is the field is not of type string.
  */
 
-public final class LowercaseProcessor extends AbstractStringProcessor {
+public final class LowercaseProcessor extends AbstractStringProcessor<String> {
 
     public static final String TYPE = "lowercase";
 
-    LowercaseProcessor(String processorTag, String field, boolean ignoreMissing, String targetField) {
-        super(processorTag, field, ignoreMissing, targetField);
+    LowercaseProcessor(String processorTag, String description, String field, boolean ignoreMissing, String targetField) {
+        super(processorTag, description, ignoreMissing, targetField, field);
+    }
+
+    public static String apply(String value) {
+        return value.toLowerCase(Locale.ROOT);
     }
 
     @Override
     protected String process(String value) {
-        return value.toLowerCase(Locale.ROOT);
+        return apply(value);
     }
 
     @Override
@@ -52,9 +56,9 @@ public final class LowercaseProcessor extends AbstractStringProcessor {
         }
 
         @Override
-        protected LowercaseProcessor newProcessor(String tag, Map<String, Object> config, String field,
+        protected LowercaseProcessor newProcessor(String tag, String description, Map<String, Object> config, String field,
                                                   boolean ignoreMissing, String targetField) {
-            return new LowercaseProcessor(tag, field, ignoreMissing, targetField);
+            return new LowercaseProcessor(tag, description, field, ignoreMissing, targetField);
         }
     }
 }

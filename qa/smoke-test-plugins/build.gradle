@@ -18,24 +18,34 @@
  */
 
 import org.elasticsearch.gradle.MavenFilteringHack
+import org.elasticsearch.gradle.info.BuildParams
 
+apply plugin: 'elasticsearch.testclusters'
 apply plugin: 'elasticsearch.standalone-rest-test'
 apply plugin: 'elasticsearch.rest-test'
+apply plugin: 'elasticsearch.rest-resources'
 
-ext.pluginsCount = 0
-project.rootProject.subprojects.findAll { it.parent.path == ':plugins' }.each { subproj ->
-  integTestCluster {
-    plugin subproj.path
+ext.pluginPaths = []
+project(':plugins').getChildProjects().each { pluginName, pluginProject ->
+  if (BuildParams.inFipsJvm && pluginName == "ingest-attachment") {
+    // Do not attempt to install ingest-attachment in FIPS 140 as it is not supported (it depends on non-FIPS BouncyCastle)
+    return
   }
-  pluginsCount += 1
+  pluginPaths << pluginProject.path
 }
-assert pluginsCount > 0
+
+testClusters.matching { it.name == "integTest" }.configureEach {
+  pluginPaths.each { pluginPath ->
+    plugin pluginPath
+  }
+}
 
 ext.expansions = [
-  'expected.plugins.count': pluginsCount
+  'expected.plugins.count': pluginPaths.size()
 ]
 
-processTestResources {
+tasks.named("processTestResources").configure {
+  assert pluginPaths.size() > 0
   inputs.properties(expansions)
   MavenFilteringHack.filter(it, expansions)
 }

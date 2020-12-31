@@ -21,24 +21,75 @@ package org.elasticsearch.common.util;
 
 import com.carrotsearch.randomizedtesting.RandomizedContext;
 import com.carrotsearch.randomizedtesting.SeedUtils;
+
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.apache.lucene.util.Accountable;
 import org.apache.lucene.util.Accountables;
 import org.apache.lucene.util.BytesRef;
+import org.apache.lucene.util.LuceneTestCase;
+import org.elasticsearch.common.breaker.CircuitBreaker;
+import org.elasticsearch.common.breaker.CircuitBreakingException;
+import org.elasticsearch.common.breaker.NoopCircuitBreaker;
+import org.elasticsearch.common.lease.Releasable;
+import org.elasticsearch.common.lease.Releasables;
 import org.elasticsearch.common.settings.Settings;
+import org.elasticsearch.common.unit.ByteSizeValue;
 import org.elasticsearch.common.util.set.Sets;
 import org.elasticsearch.indices.breaker.CircuitBreakerService;
-import org.elasticsearch.test.ESTestCase;
 
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.Map;
 import java.util.Random;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Function;
+
+import static org.elasticsearch.test.ESTestCase.assertBusy;
+import static org.junit.Assert.assertTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 public class MockBigArrays extends BigArrays {
+    private static final Logger logger = LogManager.getLogger(MockBigArrays.class);
+
+    /**
+     * Assert that a function returning a {@link Releasable} runs to completion
+     * when allocated a breaker with that breaks when it uses more than {@code max}
+     * bytes <strong>and</strong> that the function doesn't leak any
+     * {@linkplain BigArray}s if it is given a breaker that allows fewer bytes.
+     */
+    public static void assertFitsIn(ByteSizeValue max, Function<BigArrays, Releasable> run) {
+        long maxBytes = 0;
+        long prevLimit = 0;
+        while (true) {
+            ByteSizeValue limit = ByteSizeValue.ofBytes(maxBytes);
+            MockBigArrays bigArrays = new MockBigArrays(new MockPageCacheRecycler(Settings.EMPTY), limit);
+            Releasable r = null;
+            try {
+                r = run.apply(bigArrays);
+            } catch (CircuitBreakingException e) {
+                if (maxBytes >= max.getBytes()) {
+                    throw new AssertionError("required more than " + maxBytes + " bytes");
+                }
+                prevLimit = maxBytes;
+                maxBytes = Math.min(max.getBytes(), maxBytes + Math.max(1, max.getBytes() / 10));
+                continue;
+            }
+            Releasables.close(r);
+            logger.info(
+                "First successfully built using less than {} and more than {}",
+                ByteSizeValue.ofBytes(maxBytes),
+                ByteSizeValue.ofBytes(prevLimit)
+            );
+            return;
+        }
+    }
 
     /**
      * Tracking allocations is useful when debugging a leak but shouldn't be enabled by default as this would also be very costly
@@ -54,13 +105,28 @@ public class MockBigArrays extends BigArrays {
             // not empty, we might be executing on a shared cluster that keeps on obtaining
             // and releasing arrays, lets make sure that after a reasonable timeout, all master
             // copy (snapshot) have been released
-            boolean success = ESTestCase.awaitBusy(() -> Sets.haveEmptyIntersection(masterCopy.keySet(), ACQUIRED_ARRAYS.keySet()));
-            if (!success) {
+            try {
+                assertBusy(() -> assertTrue(Sets.haveEmptyIntersection(masterCopy.keySet(), ACQUIRED_ARRAYS.keySet())));
+            } catch (AssertionError ex) {
                 masterCopy.keySet().retainAll(ACQUIRED_ARRAYS.keySet());
                 ACQUIRED_ARRAYS.keySet().removeAll(masterCopy.keySet()); // remove all existing master copy we will report on
                 if (!masterCopy.isEmpty()) {
-                    final Object cause = masterCopy.entrySet().iterator().next().getValue();
-                    throw new RuntimeException(masterCopy.size() + " arrays have not been released", cause instanceof Throwable ? (Throwable) cause : null);
+                    Iterator<Object> causes = masterCopy.values().iterator();
+                    Object firstCause = causes.next();
+                    RuntimeException exception = new RuntimeException(masterCopy.size() + " arrays have not been released",
+                            firstCause instanceof Throwable ? (Throwable) firstCause : null);
+                    while (causes.hasNext()) {
+                        Object cause = causes.next();
+                        if (cause instanceof Throwable) {
+                            exception.addSuppressed((Throwable) cause);
+                        }
+                    }
+                    if (TRACK_ALLOCATIONS) {
+                        for (Object allocation : masterCopy.values()) {
+                            exception.addSuppressed((Throwable) allocation);
+                        }
+                    }
+                    throw exception;
                 }
             }
         }
@@ -70,12 +136,20 @@ public class MockBigArrays extends BigArrays {
     private final PageCacheRecycler recycler;
     private final CircuitBreakerService breakerService;
 
-    public MockBigArrays(Settings settings, CircuitBreakerService breakerService) {
-        this(new MockPageCacheRecycler(settings), breakerService, false);
+    /**
+     * Create {@linkplain BigArrays} with a configured limit.
+     */
+    public MockBigArrays(PageCacheRecycler recycler, ByteSizeValue limit) {
+        this(recycler, mock(CircuitBreakerService.class), true);
+        when(breakerService.getBreaker(CircuitBreaker.REQUEST)).thenReturn(new LimitedBreaker(CircuitBreaker.REQUEST, limit));
+    }
+
+    public MockBigArrays(PageCacheRecycler recycler, CircuitBreakerService breakerService) {
+        this(recycler, breakerService, false);
     }
 
     private MockBigArrays(PageCacheRecycler recycler, CircuitBreakerService breakerService, boolean checkBreaker) {
-        super(recycler, breakerService, checkBreaker);
+        super(recycler, breakerService, CircuitBreaker.REQUEST, checkBreaker);
         this.recycler = recycler;
         this.breakerService = breakerService;
         long seed;
@@ -249,7 +323,10 @@ public class MockBigArrays extends BigArrays {
         AbstractArrayWrapper(boolean clearOnResize) {
             this.clearOnResize = clearOnResize;
             this.originalRelease = new AtomicReference<>();
-            ACQUIRED_ARRAYS.put(this, TRACK_ALLOCATIONS ? new RuntimeException() : Boolean.TRUE);
+            Object marker = TRACK_ALLOCATIONS
+                ? new RuntimeException("Array allocated from test: " + LuceneTestCase.getTestClass().getName())
+                : true;
+            ACQUIRED_ARRAYS.put(this, marker);
         }
 
         protected abstract BigArray getDelegate();
@@ -317,6 +394,16 @@ public class MockBigArrays extends BigArrays {
         @Override
         public void fill(long fromIndex, long toIndex, byte value) {
             in.fill(fromIndex, toIndex, value);
+        }
+
+        @Override
+        public boolean hasArray() {
+            return in.hasArray();
+        }
+
+        @Override
+        public byte[] array() {
+            return in.array();
         }
 
         @Override
@@ -541,4 +628,27 @@ public class MockBigArrays extends BigArrays {
         }
     }
 
+    private static class LimitedBreaker extends NoopCircuitBreaker {
+        private final AtomicLong used = new AtomicLong();
+        private final ByteSizeValue max;
+
+        LimitedBreaker(String name, ByteSizeValue max) {
+            super(name);
+            this.max = max;
+        }
+
+        @Override
+        public double addEstimateBytesAndMaybeBreak(long bytes, String label) throws CircuitBreakingException {
+            long total = used.addAndGet(bytes);
+            if (total > max.getBytes()) {
+                throw new CircuitBreakingException("test error", bytes, max.getBytes(), Durability.TRANSIENT);
+            }
+            return total;
+        }
+
+        @Override
+        public long addWithoutBreaking(long bytes) {
+            return used.addAndGet(bytes);
+        }
+    }
 }

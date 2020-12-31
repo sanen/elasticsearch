@@ -30,17 +30,19 @@ import org.apache.lucene.store.Directory;
 import org.apache.lucene.util.NumericUtils;
 import org.elasticsearch.index.mapper.MappedFieldType;
 import org.elasticsearch.index.mapper.NumberFieldMapper;
+import org.elasticsearch.plugins.SearchPlugin;
 import org.elasticsearch.search.aggregations.AggregatorTestCase;
+import org.elasticsearch.search.aggregations.matrix.MatrixAggregationPlugin;
 
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.List;
 
 public class MatrixStatsAggregatorTests extends AggregatorTestCase {
 
     public void testNoData() throws Exception {
         MappedFieldType ft =
-            new NumberFieldMapper.NumberFieldType(NumberFieldMapper.NumberType.DOUBLE);
-        ft.setName("field");
+            new NumberFieldMapper.NumberFieldType("field", NumberFieldMapper.NumberType.DOUBLE);
 
         try (Directory directory = newDirectory();
             RandomIndexWriter indexWriter = new RandomIndexWriter(random(), directory)) {
@@ -51,22 +53,40 @@ public class MatrixStatsAggregatorTests extends AggregatorTestCase {
                 IndexSearcher searcher = new IndexSearcher(reader);
                 MatrixStatsAggregationBuilder aggBuilder = new MatrixStatsAggregationBuilder("my_agg")
                     .fields(Collections.singletonList("field"));
-                InternalMatrixStats stats = search(searcher, new MatchAllDocsQuery(), aggBuilder, ft);
+                InternalMatrixStats stats = searchAndReduce(searcher, new MatchAllDocsQuery(), aggBuilder, ft);
                 assertNull(stats.getStats());
+                assertEquals(0L, stats.getDocCount());
+            }
+        }
+    }
+
+    public void testUnmapped() throws Exception {
+        MappedFieldType ft = new NumberFieldMapper.NumberFieldType("field", NumberFieldMapper.NumberType.DOUBLE);
+
+        try (Directory directory = newDirectory();
+             RandomIndexWriter indexWriter = new RandomIndexWriter(random(), directory)) {
+            if (randomBoolean()) {
+                indexWriter.addDocument(Collections.singleton(new StringField("another_field", "value", Field.Store.NO)));
+            }
+            try (IndexReader reader = indexWriter.getReader()) {
+                IndexSearcher searcher = new IndexSearcher(reader);
+                MatrixStatsAggregationBuilder aggBuilder = new MatrixStatsAggregationBuilder("my_agg")
+                    .fields(Collections.singletonList("bogus"));
+                InternalMatrixStats stats = searchAndReduce(searcher, new MatchAllDocsQuery(), aggBuilder, ft);
+                assertNull(stats.getStats());
+                assertEquals(0L, stats.getDocCount());
             }
         }
     }
 
     public void testTwoFields() throws Exception {
         String fieldA = "a";
-        MappedFieldType ftA = new NumberFieldMapper.NumberFieldType(NumberFieldMapper.NumberType.DOUBLE);
-        ftA.setName(fieldA);
+        MappedFieldType ftA = new NumberFieldMapper.NumberFieldType(fieldA, NumberFieldMapper.NumberType.DOUBLE);
         String fieldB = "b";
-        MappedFieldType ftB = new NumberFieldMapper.NumberFieldType(NumberFieldMapper.NumberType.DOUBLE);
-        ftB.setName(fieldB);
+        MappedFieldType ftB = new NumberFieldMapper.NumberFieldType(fieldB, NumberFieldMapper.NumberType.DOUBLE);
 
         try (Directory directory = newDirectory();
-            RandomIndexWriter indexWriter = new RandomIndexWriter(random(), directory)) {
+             RandomIndexWriter indexWriter = new RandomIndexWriter(random(), directory)) {
 
             int numDocs = scaledRandomIntBetween(8192, 16384);
             Double[] fieldAValues = new Double[numDocs];
@@ -87,10 +107,15 @@ public class MatrixStatsAggregatorTests extends AggregatorTestCase {
                 IndexSearcher searcher = new IndexSearcher(reader);
                 MatrixStatsAggregationBuilder aggBuilder = new MatrixStatsAggregationBuilder("my_agg")
                     .fields(Arrays.asList(fieldA, fieldB));
-                InternalMatrixStats stats = search(searcher, new MatchAllDocsQuery(), aggBuilder, ftA, ftB);
-                multiPassStats.assertNearlyEqual(new MatrixStatsResults(stats.getStats()));
+                InternalMatrixStats stats = searchAndReduce(searcher, new MatchAllDocsQuery(), aggBuilder, ftA, ftB);
+                multiPassStats.assertNearlyEqual(stats);
+                assertTrue(MatrixAggregationInspectionHelper.hasValue(stats));
             }
         }
     }
 
+    @Override
+    protected List<SearchPlugin> getSearchPlugins() {
+        return Collections.singletonList(new MatrixAggregationPlugin());
+    }
 }

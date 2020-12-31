@@ -28,6 +28,7 @@ import org.elasticsearch.env.Environment;
 import org.elasticsearch.index.IndexSettings;
 import org.elasticsearch.index.analysis.AbstractTokenFilterFactory;
 import org.elasticsearch.index.analysis.Analysis;
+import org.elasticsearch.index.analysis.TokenFilterFactory;
 
 import java.util.List;
 import java.util.Set;
@@ -37,6 +38,7 @@ import static org.apache.lucene.analysis.miscellaneous.WordDelimiterGraphFilter.
 import static org.apache.lucene.analysis.miscellaneous.WordDelimiterGraphFilter.CATENATE_WORDS;
 import static org.apache.lucene.analysis.miscellaneous.WordDelimiterGraphFilter.GENERATE_NUMBER_PARTS;
 import static org.apache.lucene.analysis.miscellaneous.WordDelimiterGraphFilter.GENERATE_WORD_PARTS;
+import static org.apache.lucene.analysis.miscellaneous.WordDelimiterGraphFilter.IGNORE_KEYWORDS;
 import static org.apache.lucene.analysis.miscellaneous.WordDelimiterGraphFilter.PRESERVE_ORIGINAL;
 import static org.apache.lucene.analysis.miscellaneous.WordDelimiterGraphFilter.SPLIT_ON_CASE_CHANGE;
 import static org.apache.lucene.analysis.miscellaneous.WordDelimiterGraphFilter.SPLIT_ON_NUMERICS;
@@ -48,6 +50,7 @@ public class WordDelimiterGraphTokenFilterFactory extends AbstractTokenFilterFac
     private final byte[] charTypeTable;
     private final int flags;
     private final CharArraySet protoWords;
+    private final boolean adjustOffsets;
 
     public WordDelimiterGraphTokenFilterFactory(IndexSettings indexSettings, Environment env,
             String name, Settings settings) {
@@ -85,14 +88,22 @@ public class WordDelimiterGraphTokenFilterFactory extends AbstractTokenFilterFac
         // If set, causes trailing "'s" to be removed for each subword: "O'Neil's" => "O", "Neil"
         flags |= getFlag(STEM_ENGLISH_POSSESSIVE, settings, "stem_english_possessive", true);
         // If not null is the set of tokens to protect from being delimited
+        flags |= getFlag(IGNORE_KEYWORDS, settings, "ignore_keywords", false);
+        // If set, suppresses processing terms with KeywordAttribute#isKeyword()=true.
         Set<?> protectedWords = Analysis.getWordSet(env, settings, "protected_words");
         this.protoWords = protectedWords == null ? null : CharArraySet.copy(protectedWords);
         this.flags = flags;
+        this.adjustOffsets = settings.getAsBoolean("adjust_offsets", true);
     }
 
     @Override
     public TokenStream create(TokenStream tokenStream) {
-        return new WordDelimiterGraphFilter(tokenStream, charTypeTable, flags, protoWords);
+        return new WordDelimiterGraphFilter(tokenStream, adjustOffsets, charTypeTable, flags, protoWords);
+    }
+
+    @Override
+    public TokenFilterFactory getSynonymFilter() {
+        throw new IllegalArgumentException("Token filter [" + name() + "] cannot be used to parse synonyms");
     }
 
     private int getFlag(int flag, Settings settings, String key, boolean defaultValue) {

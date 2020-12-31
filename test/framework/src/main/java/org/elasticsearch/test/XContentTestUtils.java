@@ -20,6 +20,7 @@
 package org.elasticsearch.test;
 
 import org.elasticsearch.common.bytes.BytesReference;
+import org.elasticsearch.common.xcontent.DeprecationHandler;
 import org.elasticsearch.common.xcontent.NamedXContentRegistry;
 import org.elasticsearch.common.xcontent.ToXContent;
 import org.elasticsearch.common.xcontent.XContent;
@@ -28,9 +29,11 @@ import org.elasticsearch.common.xcontent.XContentFactory;
 import org.elasticsearch.common.xcontent.XContentHelper;
 import org.elasticsearch.common.xcontent.XContentParser;
 import org.elasticsearch.common.xcontent.XContentType;
+import org.elasticsearch.common.xcontent.json.JsonXContent;
 import org.elasticsearch.test.rest.yaml.ObjectPath;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -54,12 +57,19 @@ public final class XContentTestUtils {
         builder.startObject();
         part.toXContent(builder, EMPTY_PARAMS);
         builder.endObject();
-        return XContentHelper.convertToMap(builder.bytes(), false, builder.contentType()).v2();
+        return XContentHelper.convertToMap(BytesReference.bytes(builder), false, builder.contentType()).v2();
+    }
+
+    public static BytesReference convertToXContent(Map<String, ?> map, XContentType xContentType) throws IOException {
+        try (XContentBuilder builder = XContentFactory.contentBuilder(xContentType)) {
+            builder.map(map);
+            return BytesReference.bytes(builder);
+        }
     }
 
 
     /**
-     * Compares to maps generated from XContentObjects. The order of elements in arrays is ignored.
+     * Compares two maps generated from XContentObjects. The order of elements in arrays is ignored.
      *
      * @return null if maps are equal or path to the element where the difference was found
      */
@@ -144,7 +154,7 @@ public final class XContentTestUtils {
      * If the xContent output contains objects that should be skipped of such treatment, an optional filtering
      * {@link Predicate} can be supplied that checks xContent paths that should be excluded from this treatment.
      *
-     * This predicate should check the xContent path that we want to insert to and return <tt>true</tt> if the
+     * This predicate should check the xContent path that we want to insert to and return {@code true} if the
      * path should be excluded. Paths are string concatenating field names and array indices, so e.g. in:
      *
      * <pre>
@@ -184,7 +194,8 @@ public final class XContentTestUtils {
         List<String> insertPaths;
 
         // we can use NamedXContentRegistry.EMPTY here because we only traverse the xContent once and don't use it
-        try (XContentParser parser = createParser(NamedXContentRegistry.EMPTY, xContent, contentType)) {
+        try (XContentParser parser = createParser(NamedXContentRegistry.EMPTY,
+            DeprecationHandler.THROW_UNSUPPORTED_OPERATION, xContent, contentType)) {
             parser.nextToken();
             List<String> possiblePaths = XContentTestUtils.getInsertPaths(parser, new Stack<>());
             if (excludeFilter == null) {
@@ -207,8 +218,8 @@ public final class XContentTestUtils {
                 }
             }
         };
-        return XContentTestUtils
-                .insertIntoXContent(contentType.xContent(), xContent, insertPaths, () -> randomAsciiOfLength(random, 10), value).bytes();
+        return BytesReference.bytes(XContentTestUtils
+                .insertIntoXContent(contentType.xContent(), xContent, insertPaths, () -> randomAsciiOfLength(random, 10), value));
     }
 
     /**
@@ -284,7 +295,7 @@ public final class XContentTestUtils {
      * {@link ObjectPath}.
      * The key/value arguments can suppliers that either return fixed or random values.
      */
-    static XContentBuilder insertIntoXContent(XContent xContent, BytesReference original, List<String> paths, Supplier<String> key,
+    public static XContentBuilder insertIntoXContent(XContent xContent, BytesReference original, List<String> paths, Supplier<String> key,
             Supplier<Object> value) throws IOException {
         ObjectPath object = ObjectPath.createFromXContent(xContent, original);
         for (String path : paths) {
@@ -292,5 +303,35 @@ public final class XContentTestUtils {
             insertMap.put(key.get(), value.get());
         }
         return object.toXContentBuilder(xContent);
+    }
+
+    public static JsonMapView createJsonMapView(InputStream inputStream) {
+        final Map<String, Object> responseMap = XContentHelper.convertToMap(JsonXContent.jsonXContent, inputStream, true);
+
+        return new JsonMapView(responseMap);
+    }
+
+    public static class JsonMapView {
+        private final Map<String, Object> map;
+
+        public JsonMapView(Map<String, Object> map) {
+            this.map = map;
+        }
+
+        @SuppressWarnings("unchecked")
+        public <T> T get(String path) {
+            String[] keys = path.split("\\.");
+            Object context = map;
+            for (String key : keys) {
+                if (context instanceof Map) {
+                    context = ((Map<String, Object>) context).get(key);
+                } else if (context instanceof List) {
+                    context = ((List<Object>) context).get(Integer.parseInt(key));
+                } else {
+                    throw new IllegalStateException("neither list nor map");
+                }
+            }
+            return (T) context;
+        }
     }
 }

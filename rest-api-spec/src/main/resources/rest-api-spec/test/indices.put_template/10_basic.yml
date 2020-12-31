@@ -1,10 +1,6 @@
 ---
 "Put template":
 
-  - skip:
-      version: " - 5.99.99"
-      reason:  this uses a new API that has been added in 6.0
-
   - do:
       indices.put_template:
         name: test
@@ -13,6 +9,10 @@
           settings:
             number_of_shards:   1
             number_of_replicas: 0
+          mappings:
+            properties:
+              field:
+                type: keyword
 
   - do:
       indices.get_template:
@@ -21,13 +21,10 @@
 
   - match: {test.index_patterns: ["test-*"]}
   - match: {test.settings: {index.number_of_shards: '1', index.number_of_replicas: '0'}}
+  - match: {test.mappings: {properties: {field: {type: keyword}}}}
 
 ---
 "Put multiple template":
-
-  - skip:
-      version: " - 5.99.99"
-      reason:  this uses a new API that has been added in 6.0
 
   - do:
       indices.put_template:
@@ -37,6 +34,10 @@
           settings:
             number_of_shards:   1
             number_of_replicas: 0
+          mappings:
+            properties:
+              field:
+                type: text
 
   - do:
       indices.get_template:
@@ -45,13 +46,30 @@
 
   - match: {test.index_patterns: ["test-*", "test2-*"]}
   - match: {test.settings: {index.number_of_shards: '1', index.number_of_replicas: '0'}}
+  - match: {test.mappings: {properties: {field: {type: text}}}}
+
+---
+"Put template with empty mappings":
+
+  - do:
+      indices.put_template:
+        name: test
+        body:
+          index_patterns: test-*
+          settings:
+            number_of_shards:   1
+            number_of_replicas: 0
+          mappings: {}
+
+  - do:
+      indices.get_template:
+        name: test
+        flat_settings: true
+
+  - match: {test.mappings: {}}
 
 ---
 "Put template with aliases":
-
-  - skip:
-      version: " - 5.99.99"
-      reason:  this uses a new API that has been added in 6.0
 
   - do:
       indices.put_template:
@@ -76,10 +94,6 @@
 
 ---
 "Put template create":
-
-  - skip:
-      version: " - 5.99.99"
-      reason:  this uses a new API that has been added in 6.0
 
   - do:
       indices.put_template:
@@ -113,17 +127,13 @@
 ---
 "Test Put Versioned Template":
 
-  - skip:
-      version: " - 5.99.99"
-      reason:  this uses a new API that has been added in 6.0
-
   - do:
       indices.put_template:
         name: "my_template"
         body: >
           {
             "version": 10,
-            "index_patterns": "*",
+            "index_patterns": "foo*",
             "settings": { "number_of_shards": 1 }
           }
   - match: { acknowledged: true }
@@ -140,7 +150,7 @@
         body: >
           {
             "version": 9,
-            "index_patterns": "*",
+            "index_patterns": "foo*",
             "settings": { "number_of_shards": 1 }
           }
   - match: { acknowledged: true }
@@ -157,7 +167,7 @@
         body: >
           {
             "version": 6789,
-            "index_patterns": "*",
+            "index_patterns": "foo*",
             "settings": { "number_of_shards": 1 }
           }
   - match: { acknowledged: true }
@@ -173,7 +183,7 @@
         name: "my_template"
         body: >
           {
-            "index_patterns": "*",
+            "index_patterns": "foo*",
             "settings": { "number_of_shards": 1 }
           }
   - match: { acknowledged: true }
@@ -190,7 +200,7 @@
         body: >
           {
             "version": 5385,
-            "index_patterns": "*",
+            "index_patterns": "foo*",
             "settings": { "number_of_shards": 1 }
           }
   - match: { acknowledged: true }
@@ -210,3 +220,12 @@
       catch: missing
       indices.get_template:
         name: "my_template"
+
+---
+"Put index template without index_patterns":
+
+  - do:
+      catch: /index patterns are missing/
+      indices.put_template:
+        name: test
+        body: {}
